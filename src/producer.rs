@@ -8,6 +8,7 @@ use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 pub async fn run_producer(
@@ -16,6 +17,7 @@ pub async fn run_producer(
     throughput: SharedThroughput,
     shutdown: SharedNotify,
     error_count: SharedErrors,
+    msg_counter: SharedMsgs,
 ) {
     let mut client = ClientConfig::new();
     client
@@ -80,7 +82,9 @@ pub async fn run_producer(
                     .key(&key);
 
                 match producer.send(record, Duration::from_secs(1)).await {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        msg_counter.fetch_add(1, Ordering::Relaxed);
+                    }
                     Err((err, _)) => {
                         error!("Producer {id} send error: {}", err);
                         error_count.fetch_add(1, Ordering::Relaxed);

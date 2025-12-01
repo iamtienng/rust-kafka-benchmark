@@ -6,7 +6,9 @@ RUN apt-get update && apt-get install -y \
   g++ \
   pkg-config \
   libssl-dev \
+  openssl \
   zlib1g-dev \
+  perl \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/app
@@ -27,6 +29,7 @@ RUN apt-get update && apt-get install -y \
   libc6 \
   libssl3 \
   zlib1g \
+  ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

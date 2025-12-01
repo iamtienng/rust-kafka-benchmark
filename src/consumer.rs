@@ -13,6 +13,7 @@ pub async fn run_consumer(
     cfg: Arc<Config>,
     shutdown: SharedNotify,
     error_count: SharedErrors,
+    msg_counter: SharedMsgs,
 ) {
     let mut client = ClientConfig::new();
     client
@@ -61,7 +62,7 @@ pub async fn run_consumer(
                         if let Some(payload_bytes) = m.payload() {
                             match std::str::from_utf8(payload_bytes) {
                                 Ok(_payload) => {
-                                    // You can log or parse JSON here if needed
+                                    msg_counter.fetch_add(1, Ordering::Relaxed);
                                 }
                                 Err(e) => {
                                     error!("Consumer {id} invalid UTF-8 payload: {}", e);

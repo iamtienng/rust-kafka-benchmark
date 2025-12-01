@@ -10,7 +10,8 @@ pub struct Config {
     pub sasl_username: Option<String>,
     pub sasl_password: Option<String>,
     pub sasl_mechanism: Option<String>,
-    pub num_threads: usize,
+    pub producer_num_threads: usize,
+    pub consumer_num_threads: usize,
     pub msg_size: usize,
     pub throughput: u64,
     pub auto_increase: bool,
@@ -29,10 +30,15 @@ impl Config {
         let sasl_password = env::var("SASL_PASSWORD").ok();
         let sasl_mechanism = env::var("SASL_MECHANISM").ok();
 
-        let num_threads = env::var("NUM_THREADS")
+        let producer_num_threads = env::var("PRODUCER_NUM_THREADS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(4);
+
+        let consumer_num_threads = env::var("CONSUMER_NUM_THREADS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2);
 
         let msg_size = env::var("MSG_SIZE")
             .ok()
@@ -58,7 +64,8 @@ impl Config {
             sasl_username,
             sasl_password,
             sasl_mechanism,
-            num_threads,
+            producer_num_threads,
+            consumer_num_threads,
             msg_size,
             throughput,
             auto_increase,
