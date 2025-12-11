@@ -3,13 +3,13 @@ use crate::types::*;
 
 use base64::{Engine, engine::general_purpose};
 use chrono::Utc;
-use log::{error, info};
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tracing::{error, info};
 
 pub async fn run_producer(
     id: usize,

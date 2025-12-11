@@ -1,6 +1,6 @@
 use crate::types::*;
-use log::info;
 use std::time::Duration;
+use tracing::info;
 
 pub async fn adjust_throughput_loop(throughput: SharedThroughput, shutdown: SharedNotify) {
     loop {
@@ -10,7 +10,7 @@ pub async fn adjust_throughput_loop(throughput: SharedThroughput, shutdown: Shar
             _ = tokio::time::sleep(Duration::from_secs(30)) => {
                 let mut tp = throughput.write().await;
                 *tp *= 2;
-                info!("Increasing throughput → {} msg/s", *tp);
+                info!("Increasing throughput -> {} msg/s", *tp);
             }
         }
     }

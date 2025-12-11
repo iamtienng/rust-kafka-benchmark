@@ -16,15 +16,15 @@ futures = "0.3"
 
 # axum = "0.8.7"
 
-# opentelemetry = "0.29.1"
+opentelemetry = "0.31.0"
 # opentelemetry-prometheus = "0.29.1"
-# opentelemetry-otlp = "0.29.0"
-# opentelemetry_sdk = { version = "0.29.0", features = ["logs"]}
-# opentelemetry-stdout = { version = "0.29.0", features = ["logs"]}
-# opentelemetry-appender-tracing = "0.29.1"
+opentelemetry-otlp = "0.31.0"
+opentelemetry_sdk = { version = "0.31.0", features = ["logs"]}
+opentelemetry-stdout = { version = "0.31.0", features = ["logs"]}
+opentelemetry-appender-tracing = "0.31.1"
 #
-# tracing = { version = "0.1.41", features = ["std"]}
-# tracing-subscriber = { version = "0.3.20", features = ["env-filter","registry", "std", "fmt"]}
+tracing = { version = "0.1.43", features = ["std"]}
+tracing-subscriber = { version = "0.3.22", features = ["env-filter","registry", "std", "fmt"]}
 # tracing-opentelemetry = "0.32.0"
 #
 # prometheus = "0.14.0"

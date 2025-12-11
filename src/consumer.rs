@@ -1,12 +1,12 @@
 use crate::config::Config;
 use crate::types::*;
 
-use log::{error, info};
-use rdkafka::Message; // required for m.payload()
+use rdkafka::Message;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use tracing::{error, info};
 
 pub async fn run_consumer(
     id: usize,
