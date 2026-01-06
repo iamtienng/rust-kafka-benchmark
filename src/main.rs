@@ -1,15 +1,11 @@
 mod config;
 mod consumer;
-mod monitor;
 mod producer;
-mod throughput;
 mod types;
 
 use crate::config::Config;
 use crate::consumer::run_consumer;
-use crate::monitor::monitor_errors;
 use crate::producer::run_producer;
-use crate::throughput::adjust_throughput_loop;
 
 use futures::future::join_all;
 use std::sync::Arc;
@@ -87,48 +83,34 @@ async fn main() {
         )));
     }
 
-    // Throughput loop
-    if cfg.auto_increase {
-        handles.push(tokio::spawn(adjust_throughput_loop(
-            throughput.clone(),
-            shutdown.clone(),
-        )));
-    }
-
-    // Error monitor
-    handles.push(tokio::spawn(monitor_errors(
-        shutdown.clone(),
-        error_count.clone(),
-    )));
-
     handles.push(tokio::spawn(async move {
         let mut prev_produced = 0usize;
         let mut prev_consumed = 0usize;
         let mut prev_error = 0usize;
 
         loop {
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
 
             let current = producer_msg_counter.load(Ordering::Relaxed);
             let diff = current - prev_produced;
             prev_produced = current;
 
-            let mps_producer = diff as f64 / 5.0;
+            let mps_producer = diff as i32;
 
             let current = consumer_msg_counter.load(Ordering::Relaxed);
             let diff = current - prev_consumed;
             prev_consumed = current;
 
-            let mps_consumer = diff as f64 / 5.0;
+            let mps_consumer = diff as i32;
 
             let current = error_count.load(Ordering::Relaxed);
             let diff = current - prev_error;
             prev_error = current;
 
-            let eps = diff as f64 / 5.0;
+            let eps = diff as i32;
 
             info!(
-                "Produced {:.2} messages/sec (last 5s). Consumed {:.2} messages/sec (last 5s). Errors: {:.2}.",
+                "Produced {:.2} messages/sec. Consumed {:.2} messages/sec. Errors: {:.2}.",
                 mps_producer, mps_consumer, eps
             );
         }
