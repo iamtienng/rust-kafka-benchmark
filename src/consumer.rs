@@ -1,81 +1,96 @@
 use crate::config::Config;
-use crate::types::*;
+use crate::error::Result;
+use crate::metrics::Metrics;
 
 use rdkafka::Message;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use tokio::sync::Notify;
 use tracing::{error, info};
 
-pub async fn run_consumer(
+/// Kafka consumer worker
+pub struct KafkaConsumer {
     id: usize,
-    cfg: Arc<Config>,
-    shutdown: SharedNotify,
-    error_count: SharedErrors,
-    msg_counter: SharedMsgs,
-) {
-    let mut client = ClientConfig::new();
-    client
-        .set("bootstrap.servers", &cfg.bootstrap)
-        .set("group.id", format!("bench-group-{id}"))
-        .set("enable.auto.commit", "true");
+    config: Arc<Config>,
+    shutdown: Arc<Notify>,
+    metrics: Metrics,
+}
 
-    // Optional TLS
-    if let Some(ca) = &cfg.ssl_ca {
-        client
-            .set("security.protocol", "SSL")
-            .set("ssl.ca.location", ca);
-        if let (Some(cert), Some(key)) = (&cfg.ssl_cert, &cfg.ssl_key) {
-            client
-                .set("ssl.certificate.location", cert)
-                .set("ssl.key.location", key);
+impl KafkaConsumer {
+    pub fn new(id: usize, config: Arc<Config>, shutdown: Arc<Notify>, metrics: Metrics) -> Self {
+        Self {
+            id,
+            config,
+            shutdown,
+            metrics,
         }
     }
 
-    // Optional SASL
-    if let (Some(user), Some(pass), Some(mech)) =
-        (&cfg.sasl_username, &cfg.sasl_password, &cfg.sasl_mechanism)
-    {
+    /// Create a Kafka consumer client
+    fn create_consumer(&self) -> Result<StreamConsumer> {
+        let mut client = ClientConfig::new();
+
+        self.config.apply_to_client(&mut client);
+
         client
-            .set("security.protocol", "SASL_SSL")
-            .set("sasl.username", user)
-            .set("sasl.password", pass)
-            .set("sasl.mechanism", mech);
+            .set("group.id", format!("bench-group-{}", self.id))
+            .set("enable.auto.commit", "true")
+            .set("auto.offset.reset", "latest");
+
+        let consumer: StreamConsumer = client.create()?;
+        consumer.subscribe(&[&self.config.topic])?;
+
+        Ok(consumer)
     }
 
-    let consumer: StreamConsumer = client.create().expect("consumer failed");
-    consumer.subscribe(&[&cfg.topic]).expect("cannot subscribe");
+    /// Run the consumer loop
+    pub async fn run(self) -> Result<()> {
+        let consumer = self.create_consumer()?;
+        info!("Consumer {} started", self.id);
 
-    info!("Consumer {id} started.");
+        loop {
+            tokio::select! {
+                _ = self.shutdown.notified() => {
+                    info!("Consumer {} stopped", self.id);
+                    return Ok(());
+                }
 
-    loop {
-        tokio::select! {
-            _ = shutdown.notified() => {
-                info!("Consumer {id} stopped.");
-                return;
+                msg_result = consumer.recv() => {
+                    self.handle_message(msg_result);
+                }
             }
+        }
+    }
 
-            msg = consumer.recv() => {
-                match msg {
-                    Ok(m) => {
-                        if let Some(payload_bytes) = m.payload() {
-                            match std::str::from_utf8(payload_bytes) {
-                                Ok(_payload) => {
-                                    msg_counter.fetch_add(1, Ordering::Relaxed);
-                                }
-                                Err(e) => {
-                                    error!("Consumer {id} invalid UTF-8 payload: {}", e);
-                                    error_count.fetch_add(1, Ordering::Relaxed);
-                                }
-                            }
+    fn handle_message(
+        &self,
+        msg_result: std::result::Result<
+            rdkafka::message::BorrowedMessage,
+            rdkafka::error::KafkaError,
+        >,
+    ) {
+        match msg_result {
+            Ok(msg) => {
+                if let Some(payload_bytes) = msg.payload() {
+                    match std::str::from_utf8(payload_bytes) {
+                        Ok(_payload) => {
+                            self.metrics.increment_consumed();
+                        }
+                        Err(e) => {
+                            error!(
+                                consumer_id = self.id,
+                                error = %e,
+                                "Invalid UTF-8 in message payload"
+                            );
+                            self.metrics.increment_errors();
                         }
                     }
-                    Err(e) => {
-                        error!("Consumer {id} poll error: {}", e);
-                        error_count.fetch_add(1, Ordering::Relaxed);
-                    }
                 }
+            }
+            Err(e) => {
+                error!(consumer_id = self.id, error = %e, "Failed to receive message");
+                self.metrics.increment_errors();
             }
         }
     }

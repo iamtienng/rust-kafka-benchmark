@@ -1,129 +1,109 @@
 mod config;
 mod consumer;
+mod error;
+mod logging;
+mod metrics;
 mod producer;
-mod types;
 
 use crate::config::Config;
-use crate::consumer::run_consumer;
-use crate::producer::run_producer;
+use crate::consumer::KafkaConsumer;
+use crate::logging::init_logging;
+use crate::metrics::Metrics;
+use crate::producer::Producer;
 
-use futures::future::join_all;
 use std::sync::Arc;
 use tokio::signal;
-
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 use tokio::sync::{Notify, RwLock};
-
-use opentelemetry_appender_tracing::layer;
-use opentelemetry_sdk::Resource;
-use opentelemetry_sdk::logs::SdkLoggerProvider;
-use tracing::info;
-use tracing_subscriber::{EnvFilter, prelude::*};
+use tracing::{error, info};
 
 #[tokio::main]
 async fn main() {
-    let exporter = opentelemetry_stdout::LogExporter::default();
-    let provider: SdkLoggerProvider = SdkLoggerProvider::builder()
-        .with_resource(
-            Resource::builder()
-                .with_service_name("log-appender-tracing-example")
-                .build(),
-        )
-        .with_simple_exporter(exporter)
-        .build();
-    let filter_otel = EnvFilter::new("error")
-        .add_directive("hyper=off".parse().unwrap())
-        .add_directive("tonic=off".parse().unwrap())
-        .add_directive("h2=off".parse().unwrap())
-        .add_directive("reqwest=off".parse().unwrap());
-    let otel_layer = layer::OpenTelemetryTracingBridge::new(&provider).with_filter(filter_otel);
-    let filter_fmt = EnvFilter::new("info").add_directive("opentelemetry=debug".parse().unwrap());
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_thread_names(true)
-        .with_filter(filter_fmt);
+    // Initialize logging
+    let log_provider = init_logging();
 
-    tracing_subscriber::registry()
-        .with(otel_layer)
-        .with(fmt_layer)
-        .init();
+    // Load configuration
+    let config = match Config::from_env() {
+        Ok(cfg) => Arc::new(cfg),
+        Err(e) => {
+            error!("Failed to load configuration: {}", e);
+            std::process::exit(1);
+        }
+    };
 
-    let cfg = Arc::new(Config::from_env());
+    info!("Starting Kafka benchmark");
+    info!("Bootstrap servers: {}", config.bootstrap);
+    info!("Topic: {}", config.topic);
+    info!("Producer threads: {}", config.producer_num_threads);
+    info!("Consumer threads: {}", config.consumer_num_threads);
+    info!("Message size: {} bytes", config.msg_size);
+    info!("Target throughput: {} msg/sec", config.throughput);
 
-    info!("Starting Kafka benchmark with config: {:?}", cfg);
-
+    // Initialize shared state
     let shutdown = Arc::new(Notify::new());
-    let throughput = Arc::new(RwLock::new(cfg.throughput));
-    let error_count = Arc::new(AtomicUsize::new(0));
+    let throughput = Arc::new(RwLock::new(config.throughput));
+    let metrics = Metrics::new();
 
-    let mut handles = vec![];
+    // Spawn workers
+    let mut handles = Vec::new();
 
-    // Producers
-    let producer_msg_counter = Arc::new(AtomicUsize::new(0));
-    for i in 0..cfg.producer_num_threads {
-        handles.push(tokio::spawn(run_producer(
+    // Spawn producers
+    for i in 0..config.producer_num_threads {
+        let producer = Producer::new(
             i,
-            cfg.clone(),
+            config.clone(),
             throughput.clone(),
             shutdown.clone(),
-            error_count.clone(),
-            producer_msg_counter.clone(),
-        )));
+            metrics.clone(),
+        );
+
+        handles.push(tokio::spawn(async move {
+            if let Err(e) = producer.run().await {
+                error!("Producer {} error: {}", i, e);
+            }
+        }));
     }
 
-    // Consumers
-    let consumer_msg_counter = Arc::new(AtomicUsize::new(0));
-    for i in 0..cfg.consumer_num_threads {
-        handles.push(tokio::spawn(run_consumer(
-            i,
-            cfg.clone(),
-            shutdown.clone(),
-            error_count.clone(),
-            consumer_msg_counter.clone(),
-        )));
+    // Spawn consumers
+    for i in 0..config.consumer_num_threads {
+        let consumer = KafkaConsumer::new(i, config.clone(), shutdown.clone(), metrics.clone());
+
+        handles.push(tokio::spawn(async move {
+            if let Err(e) = consumer.run().await {
+                error!("Consumer {} error: {}", i, e);
+            }
+        }));
     }
 
-    handles.push(tokio::spawn(async move {
-        let mut prev_produced = 0usize;
-        let mut prev_consumed = 0usize;
-        let mut prev_error = 0usize;
+    // Spawn metrics reporter
+    let metrics_task = tokio::spawn(metrics.clone().start_reporter());
 
-        loop {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+    // Wait for shutdown signal
+    info!("Benchmark running. Press Ctrl+C to stop.");
 
-            let current = producer_msg_counter.load(Ordering::Relaxed);
-            let diff = current - prev_produced;
-            prev_produced = current;
-
-            let mps_producer = diff as i32;
-
-            let current = consumer_msg_counter.load(Ordering::Relaxed);
-            let diff = current - prev_consumed;
-            prev_consumed = current;
-
-            let mps_consumer = diff as i32;
-
-            let current = error_count.load(Ordering::Relaxed);
-            let diff = current - prev_error;
-            prev_error = current;
-
-            let eps = diff as i32;
-
-            info!(
-                "Produced {:.2} messages/sec. Consumed {:.2} messages/sec. Errors: {:.2}.",
-                mps_producer, mps_consumer, eps
-            );
+    match signal::ctrl_c().await {
+        Ok(()) => {
+            info!("Received Ctrl+C, shutting down...");
         }
-    }));
-
-    // CTRL+C
-    tokio::select! {
-        _ = signal::ctrl_c() => {
-            info!("Ctrl+C — Stopping benchmark.");
-            let _ = provider.shutdown();
-            shutdown.notify_waiters();
+        Err(e) => {
+            error!("Failed to listen for Ctrl+C: {}", e);
         }
     }
 
-    join_all(handles).await;
+    // Trigger shutdown
+    shutdown.notify_waiters();
+
+    // Wait for all workers to complete
+    for handle in handles {
+        let _ = handle.await;
+    }
+
+    // Stop metrics reporter
+    metrics_task.abort();
+
+    // Shutdown logging
+    if let Err(e) = log_provider.shutdown() {
+        eprintln!("Failed to shutdown log provider: {}", e);
+    }
+
+    info!("Benchmark stopped");
 }
