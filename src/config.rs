@@ -14,7 +14,6 @@ pub struct Config {
     pub consumer_num_threads: usize,
     pub msg_size: usize,
     pub throughput: u64,
-    pub auto_increase: bool,
 }
 
 impl Config {
@@ -50,11 +49,6 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(10_000);
 
-        let auto_increase = env::var("AUTO_INCREASE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(true);
-
         Self {
             bootstrap,
             topic,
@@ -68,7 +62,6 @@ impl Config {
             consumer_num_threads,
             msg_size,
             throughput,
-            auto_increase,
         }
     }
 }
